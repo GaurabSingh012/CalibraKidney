@@ -11,9 +11,31 @@
       "resizeMode": "contain",
       "backgroundColor": "#0a0a0a"
     },
+    "packagerOpts": {
+      "assetExts": ["tflite", "png", "jpg"]
+    },
+    "assetBundlePatterns": ["**/*"],
     "android": {
       "package": "com.gaurab.calibrakidney",
-      "usesCleartextTraffic": true
+      "versionCode": 1,
+      "usesCleartextTraffic": true,
+      "newArchEnabled": true
+    },
+    "plugins": [
+      "expo-asset",
+      [
+        "react-native-vision-camera",
+        {
+          "enableFrameProcessors": true,
+          "cameraPermissionText": "CalibraKidney needs access to your camera to scan test strips."
+        }
+      ],
+      "react-native-fast-tflite"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "a3f54657-948d-488b-bd2b-cf2c5920d36c"
+      }
     }
   }
 }
