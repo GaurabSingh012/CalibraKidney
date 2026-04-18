@@ -65,7 +65,7 @@ export default function App() {
               borderBottomWidth: 1,
               borderBottomColor: '#F1F3F5',
             },
-            headerTintColor: '#1A1A1A',
+            headerTintColor: '#37dc00',
             headerTitleAlign: 'left',
             headerTitleStyle: { 
               fontWeight: '900', 

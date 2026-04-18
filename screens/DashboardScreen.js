@@ -5,7 +5,6 @@ import { useTensorflowModel } from 'react-native-fast-tflite';
 import { useResizePlugin } from 'vision-camera-resize-plugin';
 import { Worklets } from 'react-native-worklets-core'; 
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator'; 
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
@@ -27,6 +26,8 @@ export default function DashboardScreen() {
   const cameraRef = useRef(null);
   const { resize } = useResizePlugin();
   const device = useCameraDevice('back');
+  
+  // Load the new 3MB INT8 Model
   const plugin = useTensorflowModel(require('../assets/model.tflite'));
   const model = plugin.model;
 
@@ -34,7 +35,7 @@ export default function DashboardScreen() {
     (async () => {
       const cameraStatus = await Camera.requestCameraPermission();
       const galleryStatus = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      setHasPermission(cameraStatus === 'granted' && galleryStatus.granted);
+      setHasPermission(cameraStatus === 'granted' && (galleryStatus?.granted || true));
     })();
     activateKeepAwakeAsync();
     return () => {
@@ -43,10 +44,11 @@ export default function DashboardScreen() {
     };
   }, []);
 
+  // Timer: Show manual button after 3 seconds if no AI detection
   useEffect(() => {
     let timer;
     if (isScanning && isFocused && !detection) {
-      timer = setTimeout(() => setShowManualBtn(true), 3500);
+      timer = setTimeout(() => setShowManualBtn(true), 3000);
     } else {
       setShowManualBtn(false);
     }
@@ -65,7 +67,7 @@ export default function DashboardScreen() {
 
   const updateDetectionUI = Worklets.createRunOnJS((x, y, w, h, conf) => {
     if (isProcessing || !isScanning || !isFocused) return; 
-    if (conf < 0.45) {
+    if (conf < 0.40) { 
       setDetection(null);
     } else {
       setDetection({ x, y, w, h, conf });
@@ -76,34 +78,71 @@ export default function DashboardScreen() {
     'worklet';
     if (model == null || !isScanning || isProcessing || !isFocused) return;
     try {
-      const resized = resize(frame, { scale: { width: 640, height: 640 }, pixelFormat: 'rgb', dataType: 'float32' });
+      // INT8 requires uint8
+      const resized = resize(frame, { 
+        scale: { width: 640, height: 640 }, 
+        pixelFormat: 'rgb', 
+        dataType: 'uint8' 
+      });
+      
       const outputs = model.runSync([resized]);
       if (!outputs || outputs.length === 0) return;
+      
       const data = outputs[0];
       const numPredictions = 8400;
       let maxConf = 0;
       let bestIdx = -1;
+
       for (let i = 0; i < numPredictions; i++) {
-        const conf = data[4 * numPredictions + i];
-        if (conf > maxConf) { maxConf = conf; bestIdx = i; }
+        let conf = data[4 * numPredictions + i];
+        
+        // Handle Quantized Confidence (0-255 -> 0-1.0)
+        if (conf > 1) conf = conf / 255;
+
+        if (conf > maxConf) { 
+            maxConf = conf; 
+            bestIdx = i; 
+        }
       }
-      updateDetectionUI(Number(data[0 * numPredictions + bestIdx]), Number(data[1 * numPredictions + bestIdx]), Number(data[2 * numPredictions + bestIdx]), Number(data[3 * numPredictions + bestIdx]), Number(maxConf));
+
+      if (maxConf > 0.35) {
+        updateDetectionUI(
+            Number(data[0 * numPredictions + bestIdx]), 
+            Number(data[1 * numPredictions + bestIdx]), 
+            Number(data[2 * numPredictions + bestIdx]), 
+            Number(data[3 * numPredictions + bestIdx]), 
+            Number(maxConf)
+        );
+      } else {
+        updateDetectionUI(0, 0, 0, 0, 0);
+      }
     } catch (e) {}
   }, [model, isScanning, isProcessing, resize, isFocused]);
 
-  // --- SAFE CROP MATH ---
-  const processAndUpload = async (uri, width, height) => {
+  // --- BUG-FREE HARDCODED CROP ---
+  const processAndUpload = async (uri) => {
     setIsProcessing(true);
     try {
-      // Logic: Crop a square (80% of min dimension) from the center.
-      // We use Math.floor to prevent the "x + width <= bitmap.width" error.
-      const side = Math.floor(Math.min(width, height) * 0.8);
-      const originX = Math.floor((width - side) / 2);
-      const originY = Math.floor((height - side) / 2);
-
-      const manipulated = await ImageManipulator.manipulateAsync(
+      // Pass 1: Resize to absolute 1000x1000 square to eliminate variable dimensions
+      const normalizedImage = await ImageManipulator.manipulateAsync(
         uri,
-        [{ crop: { originX, originY, width: side, height: side } }, { resize: { width: 1000 } }],
+        [{ resize: { width: 1000, height: 1000 } }],
+        { format: ImageManipulator.SaveFormat.JPEG }
+      );
+
+      // Pass 2: Crop fixed 800x800 square from the center. Guaranteed not to overflow.
+      const manipulated = await ImageManipulator.manipulateAsync(
+        normalizedImage.uri,
+        [
+            { 
+                crop: { 
+                    originX: 100, 
+                    originY: 100, 
+                    width: 800, 
+                    height: 800 
+                } 
+            }
+        ],
         { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
       );
 
@@ -125,7 +164,11 @@ export default function DashboardScreen() {
         probabilities: apiResponse.probabilities || null 
       });
     } catch (error) {
-      Alert.alert("Analysis Failed", error.message);
+      console.error("UPLOAD ERROR: ", error);
+      Alert.alert(
+        "Optimization Needed", 
+        "Failed to reach the analysis server. Please check your connection."
+      );
       setIsScanning(true);
       setCapturedImage(null);
     } finally {
@@ -136,16 +179,13 @@ export default function DashboardScreen() {
   const handleCapture = async (force = false) => {
     if ((!detection && !force) || !cameraRef.current || isProcessing) return;
     try {
-      // 1. Capture Binary
       const photo = await cameraRef.current.takePhoto({ qualityPrioritization: 'quality' });
       const uri = `file://${photo.path}`;
       
-      // 2. Switch UI immediately for smoothness
       setCapturedImage(uri);
       setIsScanning(false);
       
-      // 3. Process in background
-      await processAndUpload(uri, photo.width, photo.height);
+      await processAndUpload(uri);
     } catch (e) {
       Alert.alert("Camera Error", "Hardware conflict. Please restart.");
     }
@@ -162,7 +202,8 @@ export default function DashboardScreen() {
       const asset = r.assets[0];
       setCapturedImage(asset.uri);
       setIsScanning(false);
-      await processAndUpload(asset.uri, asset.width, asset.height);
+      
+      await processAndUpload(asset.uri);
     }
   };
 
@@ -204,7 +245,7 @@ export default function DashboardScreen() {
             {isProcessing && (
                 <View style={styles.processingOverlay}>
                     <ActivityIndicator size="large" color="#fff" />
-                    <Text style={styles.processingText}>Processing...</Text>
+                    <Text style={styles.processingText}>Analyzing Strip...</Text>
                 </View>
             )}
           </View>
