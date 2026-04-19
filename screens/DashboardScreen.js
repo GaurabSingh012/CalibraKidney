@@ -1,59 +1,23 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, ActivityIndicator, Dimensions, TouchableOpacity, ScrollView, Alert, Image } from 'react-native';
-import { Camera, useCameraDevice, useFrameProcessor } from 'react-native-vision-camera';
-import { useTensorflowModel } from 'react-native-fast-tflite';
-import { useResizePlugin } from 'vision-camera-resize-plugin';
-import { Worklets } from 'react-native-worklets-core'; 
+import React, { useState, useEffect } from 'react';
+import { StyleSheet, Text, View, ActivityIndicator, TouchableOpacity, ScrollView, Alert, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import * as ImageManipulator from 'expo-image-manipulator'; 
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import { useIsFocused } from '@react-navigation/native';
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const VIEWPORT_HEIGHT = 420;
+import AsyncStorage from '@react-native-async-storage/async-storage'; // Added this import
 
 export default function DashboardScreen() {
   const [hasPermission, setHasPermission] = useState(false);
-  const [isScanning, setIsScanning] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false); 
   const [result, setResult] = useState(null);
-  const [detection, setDetection] = useState(null);
   const [capturedImage, setCapturedImage] = useState(null);
-  const [showManualBtn, setShowManualBtn] = useState(false);
-  
-  const isFocused = useIsFocused();
-  const cameraRef = useRef(null);
-  const { resize } = useResizePlugin();
-  const device = useCameraDevice('back');
-  
-  // Load the new 3MB INT8 Model
-  const plugin = useTensorflowModel(require('../assets/model.tflite'));
-  const model = plugin.model;
 
   useEffect(() => {
     (async () => {
-      const cameraStatus = await Camera.requestCameraPermission();
+      const cameraStatus = await ImagePicker.requestCameraPermissionsAsync();
       const galleryStatus = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      setHasPermission(cameraStatus === 'granted' && (galleryStatus?.granted || true));
+      setHasPermission(cameraStatus.granted && galleryStatus.granted);
     })();
-    activateKeepAwakeAsync();
-    return () => {
-      deactivateKeepAwake();
-      setIsScanning(false);
-    };
   }, []);
-
-  // Timer: Show manual button after 3 seconds if no AI detection
-  useEffect(() => {
-    let timer;
-    if (isScanning && isFocused && !detection) {
-      timer = setTimeout(() => setShowManualBtn(true), 3000);
-    } else {
-      setShowManualBtn(false);
-    }
-    return () => clearTimeout(timer);
-  }, [isScanning, isFocused, detection]);
 
   const getStatus = (num) => {
     const map = {
@@ -65,89 +29,12 @@ export default function DashboardScreen() {
     return map[num] || { label: "ERROR", color: "#6C757D", desc: "Unable to determine status." };
   };
 
-  const updateDetectionUI = Worklets.createRunOnJS((x, y, w, h, conf) => {
-    if (isProcessing || !isScanning || !isFocused) return; 
-    if (conf < 0.40) { 
-      setDetection(null);
-    } else {
-      setDetection({ x, y, w, h, conf });
-    }
-  });
-
-  const frameProcessor = useFrameProcessor((frame) => {
-    'worklet';
-    if (model == null || !isScanning || isProcessing || !isFocused) return;
-    try {
-      // INT8 requires uint8
-      const resized = resize(frame, { 
-        scale: { width: 640, height: 640 }, 
-        pixelFormat: 'rgb', 
-        dataType: 'uint8' 
-      });
-      
-      const outputs = model.runSync([resized]);
-      if (!outputs || outputs.length === 0) return;
-      
-      const data = outputs[0];
-      const numPredictions = 8400;
-      let maxConf = 0;
-      let bestIdx = -1;
-
-      for (let i = 0; i < numPredictions; i++) {
-        let conf = data[4 * numPredictions + i];
-        
-        // Handle Quantized Confidence (0-255 -> 0-1.0)
-        if (conf > 1) conf = conf / 255;
-
-        if (conf > maxConf) { 
-            maxConf = conf; 
-            bestIdx = i; 
-        }
-      }
-
-      if (maxConf > 0.35) {
-        updateDetectionUI(
-            Number(data[0 * numPredictions + bestIdx]), 
-            Number(data[1 * numPredictions + bestIdx]), 
-            Number(data[2 * numPredictions + bestIdx]), 
-            Number(data[3 * numPredictions + bestIdx]), 
-            Number(maxConf)
-        );
-      } else {
-        updateDetectionUI(0, 0, 0, 0, 0);
-      }
-    } catch (e) {}
-  }, [model, isScanning, isProcessing, resize, isFocused]);
-
-  // --- BUG-FREE HARDCODED CROP ---
-  const processAndUpload = async (uri) => {
+  // --- STREAMLINED UPLOAD & SAVE TO HISTORY ---
+  const uploadToBackend = async (uri) => {
     setIsProcessing(true);
     try {
-      // Pass 1: Resize to absolute 1000x1000 square to eliminate variable dimensions
-      const normalizedImage = await ImageManipulator.manipulateAsync(
-        uri,
-        [{ resize: { width: 1000, height: 1000 } }],
-        { format: ImageManipulator.SaveFormat.JPEG }
-      );
-
-      // Pass 2: Crop fixed 800x800 square from the center. Guaranteed not to overflow.
-      const manipulated = await ImageManipulator.manipulateAsync(
-        normalizedImage.uri,
-        [
-            { 
-                crop: { 
-                    originX: 100, 
-                    originY: 100, 
-                    width: 800, 
-                    height: 800 
-                } 
-            }
-        ],
-        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
-      );
-
       const formData = new FormData();
-      formData.append('file', { uri: manipulated.uri, type: 'image/jpeg', name: 'strip.jpg' });
+      formData.append('file', { uri: uri, type: 'image/jpeg', name: 'strip.jpg' });
 
       const response = await fetch('http://kidney.cloud-ninja.tech:8000/predict', {
         method: 'POST',
@@ -163,51 +50,89 @@ export default function DashboardScreen() {
         confidence: apiResponse.confidence,
         probabilities: apiResponse.probabilities || null 
       });
+
+      // --- NEW: SAVE TO LOCAL VAULT ---
+      try {
+        const statusData = getStatus(apiResponse.class_index);
+        
+        // Format date like: "18 Apr 2026, 14:30"
+        const dateString = new Date().toLocaleDateString('en-GB', { 
+            day: '2-digit', month: 'short', year: 'numeric', 
+            hour: '2-digit', minute: '2-digit' 
+        });
+
+        const newRecord = {
+          id: Date.now().toString(),
+          date: dateString,
+          image: uri, 
+          label: statusData.label,
+          confidence: apiResponse.confidence
+        };
+
+        const existingHistory = await AsyncStorage.getItem('scan_history');
+        const historyArray = existingHistory ? JSON.parse(existingHistory) : [];
+        
+        historyArray.unshift(newRecord); // Add the newest scan to the top of the list
+        
+        await AsyncStorage.setItem('scan_history', JSON.stringify(historyArray));
+      } catch (storageErr) {
+        console.error("Failed to save to history: ", storageErr);
+      }
+
     } catch (error) {
       console.error("UPLOAD ERROR: ", error);
       Alert.alert(
-        "Optimization Needed", 
-        "Failed to reach the analysis server. Please check your connection."
+        "Connection Error", 
+        "Failed to reach the analysis server. Please check your internet connection."
       );
-      setIsScanning(true);
       setCapturedImage(null);
     } finally {
       setIsProcessing(false); 
     }
   };
 
-  const handleCapture = async (force = false) => {
-    if ((!detection && !force) || !cameraRef.current || isProcessing) return;
+  // --- NATIVE CAMERA WORKFLOW ---
+  const handleCapture = async () => {
+    if (isProcessing) return;
     try {
-      const photo = await cameraRef.current.takePhoto({ qualityPrioritization: 'quality' });
-      const uri = `file://${photo.path}`;
-      
-      setCapturedImage(uri);
-      setIsScanning(false);
-      
-      await processAndUpload(uri);
+      const r = await ImagePicker.launchCameraAsync({
+        allowsEditing: true,
+        aspect: [1, 1], 
+        quality: 1,
+      });
+
+      if (!r.canceled) {
+        const asset = r.assets[0];
+        setCapturedImage(asset.uri);
+        await uploadToBackend(asset.uri);
+      }
     } catch (e) {
-      Alert.alert("Camera Error", "Hardware conflict. Please restart.");
+      Alert.alert("Camera Error", "Could not launch the device camera.");
     }
   };
 
+  // --- NATIVE GALLERY WORKFLOW ---
   const handlePickImage = async () => {
-    const r = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 1,
-    });
-    if (!r.canceled) {
-      const asset = r.assets[0];
-      setCapturedImage(asset.uri);
-      setIsScanning(false);
-      
-      await processAndUpload(asset.uri);
+    if (isProcessing) return;
+    try {
+      const r = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1], 
+        quality: 1,
+      });
+
+      if (!r.canceled) {
+        const asset = r.assets[0];
+        setCapturedImage(asset.uri);
+        await uploadToBackend(asset.uri);
+      }
+    } catch (e) {
+      Alert.alert("Gallery Error", "Could not open the device gallery.");
     }
   };
 
-  if (!hasPermission || device == null) return <View style={styles.center}><ActivityIndicator size="large" color="#007bff" /></View>;
+  if (!hasPermission) return <View style={styles.center}><ActivityIndicator size="large" color="#007bff" /></View>;
 
   const status = result ? getStatus(result.predicted_class) : null;
 
@@ -215,33 +140,18 @@ export default function DashboardScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
         <Text style={styles.brandName}>CALIBRAKIDNEY</Text>
-        <Text style={styles.headerSubtitle}>{isScanning ? "Live AI Scanning" : "Analysis Complete"}</Text>
+        <Text style={styles.headerSubtitle}>{capturedImage ? "Analysis Complete" : "Ready for Analysis"}</Text>
       </View>
 
       <View style={styles.viewport}>
-        {isScanning ? (
-          <>
-            <Camera 
-                ref={cameraRef} 
-                photo 
-                style={StyleSheet.absoluteFill} 
-                device={device} 
-                isActive={isFocused && isScanning} 
-                frameProcessor={frameProcessor} 
-            />
-            {detection && (
-              <View style={[styles.boundingBox, {
-                left: ((detection.x - detection.w / 2) / 640) * (SCREEN_WIDTH * 0.8),
-                top: ((detection.y - detection.h / 2) / 640) * VIEWPORT_HEIGHT,
-                width: (detection.w / 640) * (SCREEN_WIDTH * 0.8),
-                height: (detection.h / 640) * VIEWPORT_HEIGHT,
-              }]} />
-            )}
-            <View style={styles.scanTarget} />
-          </>
+        {!capturedImage ? (
+          <View style={styles.emptyViewport}>
+             <Ionicons name="scan-outline" size={80} color="#E9ECEF" />
+             <Text style={styles.instructionText}>Take a photo of the test strip or upload an existing image to begin analysis.</Text>
+          </View>
         ) : (
           <View style={styles.previewContainer}>
-            {capturedImage && <Image source={{ uri: capturedImage }} style={StyleSheet.absoluteFill} resizeMode="contain" />}
+            <Image source={{ uri: capturedImage }} style={StyleSheet.absoluteFill} resizeMode="cover" />
             {isProcessing && (
                 <View style={styles.processingOverlay}>
                     <ActivityIndicator size="large" color="#fff" />
@@ -253,24 +163,20 @@ export default function DashboardScreen() {
       </View>
 
       <View style={styles.actionArea}>
-        {isScanning ? (
+        {!result && !isProcessing ? (
           <>
-            <TouchableOpacity 
-              style={[styles.captureBtn, (!detection && !showManualBtn) && styles.disabledBtn]} 
-              onPress={() => handleCapture(showManualBtn)} 
-            >
-              <Ionicons name={detection ? "scan-outline" : "camera-outline"} size={24} color="#fff" />
-              <Text style={styles.btnText}>
-                {detection ? "ANALYZE NOW" : (showManualBtn ? "MANUAL CAPTURE" : "ALIGN TEST STRIP")}
-              </Text>
+            <TouchableOpacity style={styles.captureBtn} onPress={handleCapture}>
+              <Ionicons name="camera-outline" size={24} color="#fff" />
+              <Text style={styles.btnText}>TAKE PHOTO</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.galleryBtn} onPress={handlePickImage} disabled={isProcessing}>
+            <TouchableOpacity style={styles.galleryBtn} onPress={handlePickImage}>
               <Ionicons name="images-outline" size={20} color="#007bff" />
               <Text style={styles.galleryBtnText}>CHOOSE FROM FILES</Text>
             </TouchableOpacity>
           </>
         ) : (
+          result && (
           <View style={styles.resultDashboard}>
             {status && (
               <>
@@ -278,10 +184,11 @@ export default function DashboardScreen() {
                 <Text style={styles.descText}>{status.desc}</Text>
               </>
             )}
-            <TouchableOpacity style={styles.resetBtn} onPress={() => {setResult(null); setCapturedImage(null); setIsScanning(true);}}>
-              <Text style={styles.resetBtnText}>BACK TO SCANNER</Text>
+            <TouchableOpacity style={styles.resetBtn} onPress={() => {setResult(null); setCapturedImage(null);}}>
+              <Text style={styles.resetBtnText}>SCAN ANOTHER STRIP</Text>
             </TouchableOpacity>
           </View>
+          )
         )}
       </View>
     </ScrollView>
@@ -294,9 +201,9 @@ const styles = StyleSheet.create({
   header: { width: '100%', marginBottom: 20 },
   brandName: { color: '#1A1A1A', fontSize: 32, fontWeight: '900' },
   headerSubtitle: { color: '#6C757D', fontSize: 13, fontWeight: '700', textTransform: 'uppercase' },
-  viewport: { width: '100%', height: VIEWPORT_HEIGHT, backgroundColor: '#000', borderRadius: 32, overflow: 'hidden' },
-  scanTarget: { position: 'absolute', width: 240, height: 240, borderWidth: 2, borderColor: 'rgba(255,255,255,0.4)', borderRadius: 24, alignSelf: 'center', top: 80 },
-  boundingBox: { position: 'absolute', borderWidth: 3, borderColor: '#00E676', borderRadius: 12, backgroundColor: 'rgba(0, 230, 118, 0.15)' },
+  viewport: { width: '100%', height: 420, backgroundColor: '#000', borderRadius: 32, overflow: 'hidden' },
+  emptyViewport: { flex: 1, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', padding: 40, borderWidth: 2, borderColor: '#F1F3F5', borderStyle: 'dashed', borderRadius: 32 },
+  instructionText: { marginTop: 20, textAlign: 'center', color: '#ADB5BD', fontSize: 16, lineHeight: 24 },
   previewContainer: { flex: 1, backgroundColor: '#111' },
   processingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
   processingText: { color: '#fff', fontWeight: 'bold', marginTop: 15 },
@@ -304,7 +211,6 @@ const styles = StyleSheet.create({
   captureBtn: { backgroundColor: '#007bff', paddingVertical: 20, borderRadius: 24, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', elevation: 4 },
   galleryBtn: { marginTop: 15, paddingVertical: 18, borderRadius: 24, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#007bff' },
   galleryBtnText: { color: '#007bff', fontWeight: '800', marginLeft: 10 },
-  disabledBtn: { backgroundColor: '#CED4DA' },
   btnText: { color: '#fff', fontWeight: '900', fontSize: 16, marginLeft: 10 },
   resultDashboard: { width: '100%', backgroundColor: '#FFFFFF', padding: 24, borderRadius: 32, elevation: 8 },
   statusTag: { alignSelf: 'center', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 16, marginBottom: 15 },
