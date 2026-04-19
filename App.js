@@ -4,9 +4,8 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, Image } from 'react-native';
 
-// Screen Imports
 import DashboardScreen from './screens/DashboardScreen';
 import HistoryScreen from './screens/HistoryScreen';
 import AboutScreen from './screens/AboutScreen';
@@ -17,18 +16,21 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <NavigationContainer>
-        {/* Set status bar to dark icons for light background */}
         <StatusBar style="dark" />
         <Tab.Navigator
           screenOptions={({ route }) => ({
             tabBarIcon: ({ focused, color, size }) => {
               let iconName;
+              
+              // Correct Ionicons names for solid (focused) vs outline (unfocused)
               if (route.name === 'Dashboard') {
-                iconName = focused ? 'flask' : 'flask-outline';
+                iconName = focused ? 'camera' : 'camera-outline';
               } else if (route.name === 'History') {
-                iconName = focused ? 'file-tray-full' : 'file-tray-full-outline';
+                // 'archive' is the correct name for the solid version of 'archive-outline'
+                iconName = focused ? 'archive' : 'archive-outline'; 
               } else if (route.name === 'About') {
-                iconName = focused ? 'shield-checkmark' : 'shield-checkmark-outline';
+                // 'information-circle' is the correct name for the solid version
+                iconName = focused ? 'information-circle' : 'information-circle-outline';
               }
 
               return (
@@ -38,9 +40,8 @@ export default function App() {
               );
             },
             
-            // Tab Bar Styling (Light Medical Aesthetic)
-            tabBarActiveTintColor: '#007bff',
-            tabBarInactiveTintColor: '#ADB5BD',
+            tabBarActiveTintColor: '#007AFF',
+            tabBarInactiveTintColor: '#8E8E93',
             tabBarLabelStyle: {
               fontSize: 10,
               fontWeight: '800',
@@ -50,22 +51,29 @@ export default function App() {
             tabBarStyle: { 
               backgroundColor: '#FFFFFF', 
               borderTopWidth: 1,
-              borderTopColor: '#F1F3F5',
+              borderTopColor: '#E5E5EA',
               height: 75,
               paddingTop: 12,
               elevation: 0,
               shadowOpacity: 0,
             },
 
-            // Header Styling (Clean, Professional Clinical Look)
             headerStyle: { 
               backgroundColor: '#FFFFFF',
               elevation: 0,
               shadowOpacity: 0,
               borderBottomWidth: 1,
-              borderBottomColor: '#F1F3F5',
+              borderBottomColor: '#E5E5EA',
             },
-            headerTintColor: '#37dc00',
+            headerLeft: () => (
+              <Image 
+                source={require('./assets/icon.png')} 
+                style={{ width: 28, height: 28, marginLeft: 20, marginRight: -5 }} 
+                resizeMode="contain" 
+              />
+            ),
+            headerTitle: 'CALIBRAKIDNEY',
+            headerTintColor: '#1C1C1E',
             headerTitleAlign: 'left',
             headerTitleStyle: { 
               fontWeight: '900', 
@@ -78,17 +86,17 @@ export default function App() {
           <Tab.Screen 
             name="Dashboard" 
             component={DashboardScreen} 
-            options={{ title: 'CALIBRAKIDNEY' }} 
+            options={{ tabBarLabel: 'CALIBRAKIDNEY' }} 
           />
           <Tab.Screen 
             name="History" 
             component={HistoryScreen} 
-            options={{ title: 'ARCHIVES' }} 
+            options={{ tabBarLabel: 'ARCHIVES' }} 
           />
           <Tab.Screen 
             name="About" 
             component={AboutScreen} 
-            options={{ title: 'PROTOCOL' }} 
+            options={{ tabBarLabel: 'PROTOCOL' }} 
           />
         </Tab.Navigator>
       </NavigationContainer>
@@ -98,7 +106,7 @@ export default function App() {
 
 const styles = StyleSheet.create({
   activeIconContainer: {
-    backgroundColor: '#F0F7FF', // Soft blue tint for active state
+    backgroundColor: '#F2F2F7',
     paddingHorizontal: 16,
     paddingVertical: 4,
     borderRadius: 16,

@@ -18,26 +18,30 @@
       "package": "com.gaurab.calibrakidney",
       "versionCode": 1,
       "permissions": [
-        "android.permission.CAMERA"
-      ]
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#0a0a0a"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.gaurab.calibrakidney",
+      "supportsTablet": true
     },
     "plugins": [
-      "expo-asset",
-      [
-        "react-native-vision-camera",
-        {
-          "enableFrameProcessors": true,
-          "cameraPermissionText": "CalibraKidney needs access to your camera to scan test strips."
-        }
-      ],
-      "react-native-fast-tflite",
       [
         "expo-build-properties",
         {
           "android": {
             "minSdkVersion": 26,
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36,
+            "buildToolsVersion": "36.0.0",
             "usesCleartextTraffic": true,
-            "newArchEnabled": true
+            "newArchEnabled": false
           }
         }
       ]
@@ -49,4 +53,4 @@
     },
     "owner": "rabgaukus"
   }
-}
+} 
